@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Контакт — онлайн-игра</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center">
+  <div class="w-full max-w-2xl mt-6 p-4 bg-white rounded shadow">
+    <h1 class="text-2xl font-bold mb-2 text-center">Контакт — онлайн-игра</h1>
+    <div id="instructions" class="mb-4 text-sm text-gray-700">
+      <details open>
+        <summary class="font-semibold cursor-pointer">Правила игры</summary>
+        <ol class="list-decimal ml-5 mt-2 space-y-1">
+          <li>Создайте лобби и поделитесь ссылкой или ID с друзьями.</li>
+          <li>Первый игрок может перемешать или выбрать ведущего вручную.</li>
+          <li>Ведущий вводит секретное слово (одно слово на русском языке).</li>
+          <li>Игрокам показывается первая буква и количество букв (например, С _ _ _ _ _).</li>
+          <li>Игроки предлагают ассоциации вне игры (например, в Discord).</li>
+          <li>Для контакта выберите игрока, с которым хотите совпасть в ассоциации.</li>
+          <li>Оба игрока пишут слово, начинается 5-секундный таймер.</li>
+          <li>Ведущий подтверждает или отклоняет совпадение. При успехе открывается следующая буква.</li>
+          <li>Ведущий может один раз попытаться угадать слово игроков («Я знаю»).</li>
+          <li>Игра завершается, когда открыты все буквы слова.</li>
+        </ol>
+      </details>
+    </div>
+    <div id="app"></div>
+  </div>
+  <script>
+    // --- Конфиг ---
+    const WS_URL = location.hostname === 'localhost' ? 'ws://localhost:3000' : 'ws://' + location.hostname + ':3000';
+    let ws, myId = null, myName = '', lobbyId = '', state = {}, contactInput = '', contactWord = '', contactTimer = null, contactTimerValue = 0;
+    let contactWordValue = '';
+    let renderTimeout = null;
+
+    // --- Элементы ---
+    const app = document.getElementById('app');
+
+    // --- Вспомогательные функции ---
+    function genId(len = 6) {
+      return Math.random().toString(36).substr(2, len);
+    }
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+    }
+    function render() {
+      // Дебаунсинг рендера - предотвращаем множественные вызовы
+      if (renderTimeout) {
+        clearTimeout(renderTimeout);
+      }
+      renderTimeout = setTimeout(() => {
+        app.innerHTML = '';
+        if (!ws || ws.readyState !== 1) {
+          app.innerHTML = `<div class="text-center">Подключение к серверу...</div>`;
+          return;
+        }
+        // --- Лобби ---
+        if (!lobbyId) {
+          app.innerHTML = `
+            <div class="mb-4">
+              <label class="block mb-1 font-semibold">Ваше имя:</label>
+              <input id="nameInput" class="border rounded px-2 py-1 w-full" maxlength="16" placeholder="Введите имя" value="${escapeHtml(myName)}">
+            </div>
+            <div class="mb-4">
+              <label class="block mb-1 font-semibold">ID лобби:</label>
+              <input id="lobbyInput" class="border rounded px-2 py-1 w-full" maxlength="12" placeholder="Введите или создайте ID">
+            </div>
+            <button id="createLobby" class="bg-blue-600 text-white px-4 py-2 rounded w-full">Войти в лобби</button>
+          `;
+          document.getElementById('nameInput').oninput = e => {
+            myName = e.target.value;
+            localStorage.setItem('contact_game_name', myName);
+          };
+          document.getElementById('createLobby').onclick = () => {
+            const name = myName.trim();
+            const id = document.getElementById('lobbyInput').value.trim() || genId();
+            if (!name || !id) return alert('Введите имя и ID лобби!');
+            lobbyId = id;
+            localStorage.setItem('contact_game_lobby', lobbyId);
+            ws.send(JSON.stringify({ type: 'join', lobbyId, name }));
+          };
+          return;
+        }
+        // --- Состояние лобби ---
+        if (!state.players) {
+          app.innerHTML = `<div class="text-center">Ожидание данных лобби...</div>`;
+          return;
+        }
+        // --- Список игроков ---
+        app.innerHTML += `
+          <div class="mb-2 flex flex-wrap items-center gap-2">
+            <span class="font-semibold">Лобби:</span>
+            <span class="bg-gray-200 rounded px-2 py-1">${escapeHtml(lobbyId)}</span>
+            <button id="copyLobby" class="ml-2 text-xs text-blue-600 underline">Скопировать ссылку</button>
+          </div>
+          <div class="mb-2">
+            <span class="font-semibold">Игроки:</span>
+            <ul class="flex flex-wrap gap-2 mt-1">
+              ${state.players.map(p => `<li class="px-2 py-1 rounded ${p.isLead ? 'bg-yellow-200' : p.isHost ? 'bg-blue-100' : 'bg-gray-100'}">${escapeHtml(p.name)}${p.id === myId ? ' <span class=\'text-xs\'>(вы)</span>' : ''}${p.isLead ? ' <span class=\'text-xs\'>[Ведущий]</span>' : ''}${p.isHost ? ' <span class=\'text-xs\'>[Хост]</span>' : ''}</li>`).join('')}
+            </ul>
+          </div>
+        `;
+        setTimeout(() => {
+          const btn = document.getElementById('copyLobby');
+          if (btn) btn.onclick = () => {
+            navigator.clipboard.writeText(location.origin + location.pathname + '?lobby=' + lobbyId);
+            btn.textContent = 'Скопировано!';
+            setTimeout(() => btn.textContent = 'Скопировать ссылку', 1200);
+          };
+        }, 100);
+        // --- Кнопки ведущего ---
+        const me = state.players.find(p => p.id === myId);
+        if (state.state === 'lobby') {
+          if (me && me.isHost) {
+            app.innerHTML += `<button id="shuffleLead" class="bg-yellow-400 px-3 py-1 rounded mr-2">Перемешать ведущего</button>`;
+          }
+          app.innerHTML += `<div class="mt-2">${state.players.map(p => `<button class="bg-gray-300 px-2 py-1 rounded m-1" data-lead="${p.id}">Сделать ведущим: ${escapeHtml(p.name)}</button>`).join('')}</div>`;
+          if (me && me.isHost) {
+            app.innerHTML += `<button id="startGame" class="bg-green-600 text-white px-4 py-2 rounded mt-4">Начать игру</button>`;
+          }
+          // --- Слушатели ---
+          setTimeout(() => {
+            if (me && me.isHost) {
+              const btn = document.getElementById('shuffleLead');
+              if (btn) btn.onclick = () => ws.send(JSON.stringify({ type: 'shuffle_lead' }));
+              const startBtn = document.getElementById('startGame');
+              if (startBtn) startBtn.onclick = () => ws.send(JSON.stringify({ type: 'start_game' }));
+            }
+            document.querySelectorAll('[data-lead]').forEach(el => {
+              if (el) el.onclick = () => ws.send(JSON.stringify({ type: 'set_lead', playerId: el.getAttribute('data-lead') }));
+            });
+          }, 100);
+          return;
+        }
+        // --- Ввод слова ведущим ---
+        if (state.state === 'word_input' && me && me.isLead) {
+          app.innerHTML += `
+            <div class="mt-4">
+              <label class="block mb-1 font-semibold">Введите секретное слово (на русском):</label>
+              <input id="wordInput" class="border rounded px-2 py-1 w-full" maxlength="16" placeholder="Например, сорока">
+              <button id="setWord" class="bg-green-600 text-white px-4 py-2 rounded mt-2">Задать слово</button>
+            </div>
+          `;
+          setTimeout(() => {
+            const setWordBtn = document.getElementById('setWord');
+            if (setWordBtn) {
+              setWordBtn.onclick = () => {
+                const word = document.getElementById('wordInput').value.trim();
+                if (!/^[А-Яа-яЁё]{2,16}$/.test(word)) return alert('Слово должно быть одним словом на русском языке (2-16 букв)!');
+                ws.send(JSON.stringify({ type: 'set_word', word }));
+              };
+            }
+          }, 100);
+          return;
+        }
+        // --- Ожидание слова ---
+        if (state.state === 'word_input' && (!me || !me.isLead)) {
+          app.innerHTML += `<div class="mt-4 text-center">Ведущий выбирает слово...</div>`;
+          return;
+        }
+        // --- Основной игровой экран ---
+        if (['association', 'finished'].includes(state.state)) {
+          // --- Секретное слово ---
+          app.innerHTML += `
+            <div class="mt-4 mb-2 text-center">
+              <span class="font-semibold">Слово:</span>
+              <span class="text-2xl font-mono tracking-widest">${escapeHtml(state.opened || '')}</span>
+              <span class="ml-2 text-gray-500">(${state.wordLength || 0} букв)</span>
+            </div>
+          `;
+          // --- Контакт ---
+          if (state.contact) {
+            const contact = state.contact;
+            const from = state.players.find(p => p.id === contact.fromId);
+            const to = state.players.find(p => p.id === contact.toId);
+            app.innerHTML += `<div class="mb-2 text-center font-semibold">Контакт между: ${escapeHtml(from?.name || '')} и ${escapeHtml(to?.name || '')}</div>`;
+            // Таймер
+            app.innerHTML += `<div class="mb-2 text-center"><span class="font-mono text-lg">${contact.timer || 0}</span> сек.</div>`;
+            // Ввод слов для участников
+            if ((myId === contact.fromId || myId === contact.toId) && !contact.words[myId]) {
+              app.innerHTML += `
+                <div class="mb-2 text-center">
+                  <input id="contactWord" class="border rounded px-2 py-1" maxlength="16" placeholder="Ваше слово">
+                  <button id="sendContactWord" class="bg-blue-600 text-white px-3 py-1 rounded ml-2">Отправить</button>
+                </div>
+              `;
+              setTimeout(() => {
+                const input = document.getElementById('contactWord');
+                if (input) {
+                  input.value = contactWordValue;
+                  input.oninput = (e) => { contactWordValue = e.target.value; };
+                  input.focus();
+                }
+                const sendBtn = document.getElementById('sendContactWord');
+                if (sendBtn) {
+                  sendBtn.onclick = () => {
+                    const word = document.getElementById('contactWord').value.trim();
+                    if (!/^[А-Яа-яЁё]{2,16}$/.test(word)) return alert('Слово должно быть на русском языке!');
+                    if ((state.usedWords || []).some(used => used.toLowerCase() === word.toLowerCase())) return alert('Это слово уже использовано!');
+                    ws.send(JSON.stringify({ type: 'contact_word', playerId: myId, word }));
+                    contactWordValue = '';
+                  };
+                }
+              }, 0);
+            }
+            // Ожидание окончания контакта
+            if (contact.finished) {
+              app.innerHTML += `<div class="mb-2 text-center text-gray-600">Контакт завершён. Ожидание решения ведущего...</div>`;
+            }
+          } else if (state.state !== 'finished') {
+            // --- Кнопки "Контакт" ---
+            // Ведущий не может инициировать контакт и не может быть объектом контакта
+            if (me && !me.isLead) {
+              app.innerHTML += `<div class="mb-2 font-semibold">Инициировать контакт:</div><div class="flex flex-wrap gap-2 mb-2">`;
+              state.players.filter(p => p.id !== myId && !p.isLead).forEach(p => {
+                app.innerHTML += `<button class="bg-blue-300 px-2 py-1 rounded" data-contact="${p.id}">Контакт с ${escapeHtml(p.name)}</button>`;
+              });
+              app.innerHTML += `</div>`;
+              setTimeout(() => {
+                document.querySelectorAll('[data-contact]').forEach(el => {
+                  if (el) el.onclick = () => ws.send(JSON.stringify({ type: 'start_contact', fromId: myId, toId: el.getAttribute('data-contact') }));
+                });
+              }, 100);
+            }
+          }
+          // --- Решение ведущего ---
+          if (me && me.isLead && state.contact && state.contact.finished) {
+            const words = Object.values(state.contact.words || {});
+            app.innerHTML += `<div class="mb-2 text-center">Слова игроков: <span class="font-mono">${words.map(escapeHtml).join(' / ')}</span></div>`;
+            app.innerHTML += `<div class="mb-2 text-center">
+              <button id="confirmContact" class="bg-green-600 text-white px-3 py-1 rounded mr-2">Подтвердить</button>
+              <button id="rejectContact" class="bg-red-600 text-white px-3 py-1 rounded">Отклонить</button>
+            </div>`;
+            setTimeout(() => {
+              // Используем addEventListener вместо onclick для более надежной работы
+              const setupContactButtons = () => {
+                const confirmBtn = document.getElementById('confirmContact');
+                const rejectBtn = document.getElementById('rejectContact');
+                
+                if (confirmBtn && rejectBtn) {
+                  // Удаляем старые обработчики
+                  confirmBtn.replaceWith(confirmBtn.cloneNode(true));
+                  rejectBtn.replaceWith(rejectBtn.cloneNode(true));
+                  
+                  // Получаем новые элементы
+                  const newConfirmBtn = document.getElementById('confirmContact');
+                  const newRejectBtn = document.getElementById('rejectContact');
+                  
+                  if (newConfirmBtn && newRejectBtn) {
+                    newConfirmBtn.addEventListener('click', () => {
+                      // Если слова совпали (игнорируя регистр), добавить их в usedWords
+                      console.log('=== ОТЛАДКА ПОДТВЕРЖДЕНИЯ КОНТАКТА ===');
+                      console.log('Исходные слова:', words);
+                      console.log('Типы слов:', typeof words[0], typeof words[1]);
+                      console.log('Длины слов:', words[0]?.length, words[1]?.length);
+                      console.log('Слова в нижнем регистре:', words[0]?.toLowerCase(), words[1]?.toLowerCase());
+                      console.log('Коды символов первого слова:', words[0]?.split('').map(c => c.charCodeAt(0)));
+                      console.log('Коды символов второго слова:', words[1]?.split('').map(c => c.charCodeAt(0)));
+                      console.log('Сравнение toLowerCase():', words[0]?.toLowerCase() === words[1]?.toLowerCase());
+                      console.log('Прямое сравнение:', words[0] === words[1]);
+                      console.log('Сравнение через localeCompare:', words[0]?.toLowerCase().localeCompare(words[1]?.toLowerCase()) === 0);
+                      
+                      // Принудительная нормализация слов
+                      const normalizeWord = (word) => {
+                        return word?.toString()
+                          .toLowerCase()
+                          .trim()
+                          .replace(/\s+/g, '') // убираем все пробелы
+                          .replace(/[^\wа-яё]/gi, ''); // оставляем только буквы и цифры
+                      };
+                      
+                      const word1 = normalizeWord(words[0]);
+                      const word2 = normalizeWord(words[1]);
+                      console.log('Нормализованные слова:', word1, word2);
+                      console.log('Финальное сравнение:', word1 === word2);
+                      
+                      // Показываем отладку в alert
+                      const debugInfo = `Сравнение слов:
+Исходные: "${words[0]}" и "${words[1]}"
+Нормализованные: "${word1}" и "${word2}"
+Совпадают: ${word1 === word2}`;
+                      console.log(debugInfo);
+                      
+                      if (words.length === 2 && word1 === word2) {
+                        console.log('✅ Слова совпадают, подтверждаю контакт');
+                        ws.send(JSON.stringify({ type: 'contact_result', success: true, usedWords: [words[0]] }));
+                      } else {
+                        console.log('❌ Слова не совпадают');
+                        alert(debugInfo + '\n\nСлова не совпадают!');
+                      }
+                    });
+                    
+                    newRejectBtn.addEventListener('click', () => {
+                      ws.send(JSON.stringify({ type: 'contact_result', success: false, usedWords: [] }));
+                    });
+                    
+                    console.log('✅ Кнопки контакта настроены успешно');
+                  }
+                } else {
+                  console.error('❌ Элементы кнопок не найдены, повторная попытка...');
+                  // Повторная попытка через 100ms
+                  setTimeout(setupContactButtons, 100);
+                }
+              };
+              
+              requestAnimationFrame(setupContactButtons);
+            }, 500); // Увеличиваем задержку до 500ms
+          }
+          // --- Лог использованных слов ---
+          app.innerHTML += `<div class="mt-4 mb-2"><span class="font-semibold">Использованные слова:</span> <span class="text-gray-700">${(state.usedWords || []).map(escapeHtml).join(', ') || '—'}</span></div>`;
+          // --- Чат ---
+          app.innerHTML += `<div class="mb-2"><span class="font-semibold">Чат:</span><div class="bg-gray-50 border rounded p-2 h-24 overflow-y-auto" id="chatBox">${(state.chat || []).map(m => `<div><span class="font-semibold">${escapeHtml((state.players.find(p => p.id === m.playerId) || {}).name || '?')}</span>: ${escapeHtml(m.text)}</div>`).join('')}</div></div>`;
+          app.innerHTML += `<div class="flex gap-2 mb-2"><input id="chatInput" class="border rounded px-2 py-1 flex-1" maxlength="64" placeholder="Сообщение..."><button id="sendChat" class="bg-blue-600 text-white px-3 py-1 rounded">Отправить</button></div>`;
+          setTimeout(() => {
+            const sendChatBtn = document.getElementById('sendChat');
+            if (sendChatBtn) {
+              sendChatBtn.onclick = () => {
+                const text = document.getElementById('chatInput').value.trim();
+                if (text) ws.send(JSON.stringify({ type: 'send_chat', playerId: myId, text }));
+                document.getElementById('chatInput').value = '';
+              };
+            }
+          }, 100);
+          // --- Конец игры ---
+          if (state.state === 'finished') {
+            app.innerHTML += `<div class="mt-4 text-center text-2xl font-bold text-green-700">Слово отгадано! Игра завершена.</div>`;
+            if (me && me.isHost) {
+              app.innerHTML += `<div class="text-center mt-2"><button id="resetBtn" class="bg-gray-400 text-white px-4 py-2 rounded">Сбросить и начать заново</button></div>`;
+              setTimeout(() => {
+                const resetBtn = document.getElementById('resetBtn');
+                if (resetBtn) resetBtn.onclick = () => ws.send(JSON.stringify({ type: 'reset' }));
+              }, 100);
+            }
+          }
+          return;
+        }
+        // --- Фолбэк ---
+        app.innerHTML += `<div class="mt-4 text-center text-gray-500">Неизвестное состояние игры.</div>`;
+      }, 100);
+    }
+
+    // --- WebSocket ---
+    function connect() {
+      ws = new WebSocket(WS_URL);
+      ws.onopen = () => {
+        // Если есть lobbyId и имя — переподключение
+        if (lobbyId && myName) {
+          ws.send(JSON.stringify({ type: 'join', lobbyId, name: myName }));
+        }
+        render();
+      };
+      ws.onmessage = e => {
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.type === 'lobby_update') {
+          state = msg.lobby || {};
+          if (state.players) {
+            const me = state.players.find(p => p.name === myName);
+            if (me) myId = me.id;
+          }
+          render();
+        }
+        if (msg.type === 'contact_started' || msg.type === 'contact_update' || msg.type === 'contact_finished') {
+          state.contact = msg.contact;
+          // Сохраняем состояние в localStorage
+          localStorage.setItem('contact_game_state', JSON.stringify(state));
+          render();
+        }
+        if (msg.type === 'timer') {
+          if (state.contact) state.contact.timer = msg.timer;
+          render();
+        }
+        if (msg.type === 'chat') {
+          state.chat = msg.chat;
+          localStorage.setItem('contact_game_state', JSON.stringify(state));
+          render();
+        }
+        if (msg.type === 'error') {
+          alert('Ошибка: ' + msg.text);
+        }
+        if (msg.type === 'contact_result') {
+          // После завершения контакта (подтверждение/отклонение)
+          localStorage.setItem('contact_game_state', JSON.stringify(state));
+          render();
+        }
+      };
+      ws.onclose = () => {
+        setTimeout(connect, 1000);
+        app.innerHTML = '<div class="text-center text-red-600">Отключено от сервера. Переподключение...</div>';
+      };
+    }
+    // --- Автозапуск ---
+    if (location.search.includes('lobby=')) {
+      lobbyId = decodeURIComponent(location.search.split('lobby=')[1].split('&')[0]);
+    }
+    // Восстанавливаем имя из localStorage
+    myName = localStorage.getItem('contact_game_name') || '';
+    // Восстанавливаем lobbyId из localStorage если есть
+    const savedLobbyId = localStorage.getItem('contact_game_lobby');
+    if (!lobbyId && savedLobbyId) {
+      lobbyId = savedLobbyId;
+    }
+    // Восстанавливаем состояние игры из localStorage (очищаем старые данные)
+    const savedState = localStorage.getItem('contact_game_state');
+    if (savedState) {
+      try {
+        const parsedState = JSON.parse(savedState);
+        // Очищаем старые данные о кнопке "Я знаю"
+        delete parsedState.canLeadGuess;
+        state = { ...state, ...parsedState };
+      } catch (e) {
+        console.log('Ошибка восстановления состояния:', e);
+        // Очищаем поврежденные данные
+        localStorage.removeItem('contact_game_state');
+      }
+    }
+    connect();
+    render();
+  </script>
+</body>
+</html> 
