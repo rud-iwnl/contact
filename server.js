@@ -255,10 +255,10 @@ wss.on('connection', function connection(ws) {
   });
 });
 
-// Раздача статики (например, index.html)
+// Раздача всех файлов из текущей папки (например, index.html)
 app.use(express.static(path.join(__dirname)));
 
-// (Необязательно) Явный обработчик для корня
+// Явный обработчик для корня (не обязателен, но полезен)
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
