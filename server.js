@@ -1,5 +1,13 @@
 const WebSocket = require('ws');
 const { v4: uuidv4 } = require('uuid');
+const express = require('express');
+const path = require('path');
+const http = require('http');
+const server = http.createServer();
+const io = require('socket.io')(server);
+const app = express();
+
+const PORT = process.env.PORT || 3000;
 
 // Запуск WebSocket-сервера на порту 3000
 const wss = new WebSocket.Server({ port: 3000 });
@@ -247,4 +255,14 @@ wss.on('connection', function connection(ws) {
   });
 });
 
-console.log('WebSocket server started on ws://localhost:3000'); 
+// Раздача статики (например, index.html)
+app.use(express.static(path.join(__dirname)));
+
+// (Необязательно) Явный обработчик для корня
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+server.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+}); 
