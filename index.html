@@ -30,7 +30,9 @@
   </div>
   <script>
     // --- Конфиг ---
-    const WS_URL = location.hostname === 'localhost' ? 'ws://localhost:3000' : 'ws://' + location.hostname + ':3000';
+    const WS_URL = location.protocol === 'https:' 
+      ? 'wss://' + location.host 
+      : 'ws://' + location.host;
     let ws, myId = null, myName = '', lobbyId = '', state = {}, contactInput = '', contactWord = '', contactTimer = null, contactTimerValue = 0;
     let contactWordValue = '';
     let renderTimeout = null;
