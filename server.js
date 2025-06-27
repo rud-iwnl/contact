@@ -3,14 +3,13 @@ const { v4: uuidv4 } = require('uuid');
 const express = require('express');
 const path = require('path');
 const http = require('http');
-const server = http.createServer();
-const io = require('socket.io')(server);
-const app = express();
 
+const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
-// Запуск WebSocket-сервера на порту 3000
-const wss = new WebSocket.Server({ port: 3000 });
+// WebSocket-сервер на базе http-сервера
+const wss = new WebSocket.Server({ server });
 
 // Структура для хранения всех лобби
 // Формат: { [lobbyId]: { players: [...], state, ... } }
@@ -255,14 +254,14 @@ wss.on('connection', function connection(ws) {
   });
 });
 
-// Раздача всех файлов из текущей папки (например, index.html)
+// Раздача статики (например, index.html)
 app.use(express.static(path.join(__dirname)));
 
-// Явный обработчик для корня (не обязателен, но полезен)
+// (Необязательно) Явный обработчик для корня
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
-}); 
+});
