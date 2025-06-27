@@ -96,6 +96,8 @@
             <span class="font-semibold">Лобби:</span>
             <span class="bg-gray-200 rounded px-2 py-1">${escapeHtml(lobbyId)}</span>
             <button id="copyLobby" class="ml-2 text-xs text-blue-600 underline">Скопировать ссылку</button>
+            <button id="leaveLobby" class="ml-2 text-xs text-red-600 underline">Выйти из лобби</button>
+            <button id="recreateLobby" class="ml-2 text-xs text-green-600 underline">Пересоздать лобби</button>
           </div>
           <div class="mb-2">
             <span class="font-semibold">Игроки:</span>
@@ -110,6 +112,35 @@
             navigator.clipboard.writeText(location.origin + location.pathname + '?lobby=' + lobbyId);
             btn.textContent = 'Скопировано!';
             setTimeout(() => btn.textContent = 'Скопировать ссылку', 1200);
+          };
+          // --- Выйти из лобби ---
+          const leaveBtn = document.getElementById('leaveLobby');
+          if (leaveBtn) leaveBtn.onclick = () => {
+            if (ws) ws.close();
+            lobbyId = '';
+            state = {};
+            myId = null;
+            contactWordValue = '';
+            localStorage.removeItem('contact_game_lobby');
+            localStorage.removeItem('contact_game_state');
+            render();
+          };
+          // --- Пересоздать лобби ---
+          const recreateBtn = document.getElementById('recreateLobby');
+          if (recreateBtn) recreateBtn.onclick = () => {
+            if (ws) ws.close();
+            lobbyId = genId();
+            state = {};
+            myId = null;
+            contactWordValue = '';
+            localStorage.setItem('contact_game_lobby', lobbyId);
+            localStorage.removeItem('contact_game_state');
+            render();
+            setTimeout(() => {
+              if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify({ type: 'join', lobbyId, name: myName }));
+              }
+            }, 500);
           };
         }, 100);
         // --- Кнопки ведущего ---
