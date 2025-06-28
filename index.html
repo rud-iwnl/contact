@@ -7,7 +7,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col items-center">
-  <div class="w-full max-w-2xl mt-6 p-4 bg-white rounded shadow">
+  <div class="w-full max-w-2xl mt-6 p-4 bg-white rounded shadow overflow-y-auto" style="min-height: 80vh; max-height: 95vh;">
     <h1 class="text-2xl font-bold mb-2 text-center">Контакт — онлайн-игра</h1>
     <div id="instructions" class="mb-4 text-sm text-gray-700">
       <details open>
@@ -212,11 +212,11 @@
             // Таймер
             app.innerHTML += `<div class="mb-2 text-center"><span class="font-mono text-lg">${contact.timer || 0}</span> сек.</div>`;
             // Ввод слов для участников
-            if ((myId === contact.fromId || myId === contact.toId) && !contact.words[myId]) {
+            if (state.contact && (myId === state.contact.fromId || myId === state.contact.toId) && !state.contact.words[myId]) {
               app.innerHTML += `
                 <div class="mb-2 text-center">
-                  <input id="contactWord" class="border rounded px-2 py-1" maxlength="16" placeholder="Ваше слово">
-                  <button id="sendContactWord" class="bg-blue-600 text-white px-3 py-1 rounded ml-2">Отправить</button>
+                  <input id="contactWord" class="border rounded px-2 py-1 w-full max-w-xs" maxlength="16" placeholder="Ваше слово" autocomplete="off" autocapitalize="off" spellcheck="false">
+                  <button id="sendContactWord" class="bg-blue-600 text-white px-3 py-1 rounded ml-2 mt-2 w-full sm:w-auto">Отправить</button>
                 </div>
               `;
               setTimeout(() => {
@@ -228,13 +228,13 @@
                 }
                 const sendBtn = document.getElementById('sendContactWord');
                 if (sendBtn) {
-                  sendBtn.onclick = () => {
+                  sendBtn.addEventListener('click', () => {
                     const word = document.getElementById('contactWord').value.trim();
                     if (!/^[А-Яа-яЁё]{2,16}$/.test(word)) return alert('Слово должно быть на русском языке!');
                     if ((state.usedWords || []).some(used => used.toLowerCase() === word.toLowerCase())) return alert('Это слово уже использовано!');
                     ws.send(JSON.stringify({ type: 'contact_word', playerId: myId, word }));
                     contactWordValue = '';
-                  };
+                  });
                 }
               }, 0);
             }
@@ -244,16 +244,15 @@
             }
           } else if (state.state !== 'finished') {
             // --- Кнопки "Контакт" ---
-            // Ведущий не может инициировать контакт и не может быть объектом контакта
-            if (me && !me.isLead) {
+            if (me && !me.isLead && !state.contact && state.state !== 'finished') {
               app.innerHTML += `<div class="mb-2 font-semibold">Инициировать контакт:</div><div class="flex flex-wrap gap-2 mb-2">`;
               state.players.filter(p => p.id !== myId && !p.isLead).forEach(p => {
-                app.innerHTML += `<button class="bg-blue-300 px-2 py-1 rounded" data-contact="${p.id}">Контакт с ${escapeHtml(p.name)}</button>`;
+                app.innerHTML += `<button class="bg-blue-300 px-2 py-1 rounded m-1 w-full sm:w-auto" data-contact="${p.id}">Контакт с ${escapeHtml(p.name)}</button>`;
               });
               app.innerHTML += `</div>`;
               setTimeout(() => {
                 document.querySelectorAll('[data-contact]').forEach(el => {
-                  if (el) el.onclick = () => ws.send(JSON.stringify({ type: 'start_contact', fromId: myId, toId: el.getAttribute('data-contact') }));
+                  el.addEventListener('click', () => ws.send(JSON.stringify({ type: 'start_contact', fromId: myId, toId: el.getAttribute('data-contact') })));
                 });
               }, 100);
             }
